@@ -8,7 +8,7 @@ type Group = {id:string;name:string;description?:string;member_ids:string[];memb
 type Member = {user_id:string;role:string;vtab_users?:User;access_sources?:string[]};
 type AuditEvent = {id:string;created_at:string;action:string;category:string;status?:string;object_type?:string;object_id?:string;details?:Record<string,unknown>};
 
-const API='http://127.0.0.1:8000/api';
+const API = import.meta.env.VITE_API_URL || '/api';
 const paths:Record<string,string>={overview:'M3 13h8V3H3v10Zm10 8h8V11h-8v10ZM3 21h8v-6H3v6Zm10-12h8V3h-8v6Z',workspaces:'M3 7h7l2 2h9v10H3V7Z',users:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',groups:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8m11 1v6m3-3h-6',audit:'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',tickets:'M4 4h16v16H4V4Zm4 4h8M8 12h8M8 16h5',settings:'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7-3.5 2-1.5-2-3.5-2.5 1L15 6l-.3-3h-5L9.5 6 8 7 5.5 6 3.5 9.5 5.5 11a7 7 0 0 0 0 2l-2 1.5 2 3.5L8 17l1.5 1 .3 3h5l.3-3 1.5-1 2.5 1 2-3.5-2-1.5a7 7 0 0 0 0-1Z',search:'M21 21l-4.3-4.3M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z',plus:'M12 5v14M5 12h14',close:'M18 6 6 18M6 6l12 12',arrow:'M19 12H5m7-7-7 7 7 7',logout:'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9'};
 function Icon({name,size=18}:{name:string,size?:number}){return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.overview}/></svg>}
 const initials=(v='')=>v.split(/\s|@/).filter(Boolean).slice(0,2).map(x=>x[0]?.toUpperCase()).join('')||'U';

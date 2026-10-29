@@ -412,17 +412,98 @@ def admin_get_workspace_members(workspace_id: str, authorization: str | None = H
     group_links = sb.table('workspace_group_member_links').select('user_id,group_id').eq('workspace_id', workspace_id).execute().data or []
     groups = sb.table('user_groups').select('id,name').execute().data or []
     group_names = {row['id']: row['name'] for row in groups}
-    for m in res.data or []:
+    ws_rows = sb.table('workspaces').select('id,name,owner_id,created_by,description').eq('id', workspace_id).limit(1).execute().data or []
+    ws = ws_rows[0] if ws_rows else {}
+    owner_id = ws.get('owner_id') or ws.get('created_by')
+    member_permissions = {}
+    try:
+        parsed_description = json.loads(ws.get('description') or '{}')
+        if isinstance(parsed_description, dict):
+            member_permissions = parsed_description.get('member_ui_permissions') or {}
+    except Exception:
+        member_permissions = {}
+
+    members = res.data or []
+    if owner_id and str(owner_id) not in {str(member.get('user_id')) for member in members}:
+        members.insert(0, {'user_id': owner_id, 'role': 'Owner', 'is_owner': True, 'access_sources': ['Owner']})
+
+    permission_defaults = {
+        'all_commands': True,
+        'can_file': True,
+        'can_home': True,
+        'can_view': True,
+        'can_share': True,
+        'can_pdf': True,
+        'can_ppt': True,
+        'can_refresh': True,
+        'can_subscribe': True,
+        'can_alert': True,
+        'can_download': True,
+    }
+    for m in members:
+        uid = str(m['user_id'])
+        if owner_id and uid == str(owner_id):
+            m['is_owner'] = True
         u = user_dict.get(m['user_id'])
         if u:
             m['vtab_users'] = {'email': u['email'], 'display_name': u['display_name']}
-        sources = []
-        if m['user_id'] in direct_ids:
-            sources.append('Direct')
-        sources.extend(group_names.get(link['group_id'], 'Group') for link in group_links if link['user_id'] == m['user_id'])
-        m['access_sources'] = sources or ['Direct']
+        if 'access_sources' not in m:
+            sources = []
+            if m['user_id'] in direct_ids:
+                sources.append('Direct')
+            sources.extend(group_names.get(link['group_id'], 'Group') for link in group_links if link['user_id'] == m['user_id'])
+            m['access_sources'] = sources or ['Direct']
+        configured = member_permissions.get(uid) or {}
+        m['ui_permissions'] = {key: bool(configured.get(key, default)) for key, default in permission_defaults.items()}
 
-    return {"members": res.data or []}
+    return {"members": members}
+
+
+class UpdateMemberUiPermissionsReq(BaseModel):
+    all_commands: bool = True
+    can_file: bool = True
+    can_home: bool = True
+    can_view: bool = True
+    can_share: bool = True
+    can_pdf: bool = True
+    can_ppt: bool = True
+    can_refresh: bool = True
+    can_subscribe: bool = True
+    can_alert: bool = True
+    can_download: bool = True
+
+
+@app.put("/api/workspaces/{workspace_id}/members/{user_id}/ui-permissions")
+def admin_update_member_ui_permissions(workspace_id: str, user_id: str, req: UpdateMemberUiPermissionsReq, authorization: str | None = Header(default=None)):
+    actor = _require_admin(authorization, write=True)
+    sb = get_supabase()
+    rows = sb.table('workspaces').select('id,description').eq('id', workspace_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(404, "Workspace not found")
+    raw_description = rows[0].get('description') or ''
+    try:
+        description = json.loads(raw_description) if raw_description else {}
+        if not isinstance(description, dict):
+            description = {'text': str(raw_description)}
+    except Exception:
+        description = {'text': str(raw_description)}
+    permissions = {
+        'all_commands': bool(req.all_commands),
+        'can_file': bool(req.can_file),
+        'can_home': bool(req.can_home),
+        'can_view': bool(req.can_view),
+        'can_share': bool(req.can_share),
+        'can_pdf': bool(req.can_pdf),
+        'can_ppt': bool(req.can_ppt),
+        'can_refresh': bool(req.can_refresh),
+        'can_subscribe': bool(req.can_subscribe),
+        'can_alert': bool(req.can_alert),
+        'can_download': bool(req.can_download),
+    }
+    description.setdefault('member_ui_permissions', {})[str(user_id)] = permissions
+    sb.table('workspaces').update({'description': json.dumps(description)}).eq('id', workspace_id).execute()
+    _audit('workspace.member.ui_permissions', 'workspace', workspace_id, actor, {'target_user_id': user_id, 'permissions': permissions}, workspace_id)
+    return {'ok': True, 'ui_permissions': permissions}
 
 class BatchAddMembersReq(BaseModel):
     user_ids: list[str]
@@ -560,19 +641,14 @@ def admin_update_workspace_notification_policy(workspace_id: str, req: UpdateNot
             raise HTTPException(404, "Workspace not found")
         ws = ws_rows[0]
         existing_desc = ws.get('description') or ''
-        desc_text = ''
-        if existing_desc:
-            try:
-                import json as _json
-                p = _json.loads(existing_desc)
-                if isinstance(p, dict):
-                    desc_text = p.get('text', '')
-                else:
-                    desc_text = str(existing_desc)
-            except Exception:
-                desc_text = str(existing_desc)
-        import json as _json
-        payload = _json.dumps({"text": desc_text, "notification_policy": clean_policy})
+        try:
+            parsed_desc = json.loads(existing_desc) if existing_desc else {}
+            if not isinstance(parsed_desc, dict):
+                parsed_desc = {'text': str(existing_desc)}
+        except Exception:
+            parsed_desc = {'text': str(existing_desc)}
+        parsed_desc['notification_policy'] = clean_policy
+        payload = json.dumps(parsed_desc)
         sb.table('workspaces').update({'description': payload}).eq('id', workspace_id).execute()
         _audit('workspace.notification_policy.update', 'workspace', workspace_id, actor, clean_policy, workspace_id)
         return {"ok": True, "policy": clean_policy}

@@ -1,0 +1,49 @@
+/* Searchable combo styled like the native Viewer role dropdown. */
+.modernAccessAdd .userPickerControl{
+  height:36px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 42px;
+  align-items:center;
+  overflow:hidden;
+  border:1px solid #d7dee7;
+  border-radius:7px;
+  background:#fff;
+}
+.modernAccessAdd .userPickerControl:hover{border-color:#c9d2dc}
+.modernAccessAdd .userPickerControl.open{border-color:#c9d2dc}
+.modernAccessAdd .userPickerControl input,
+.modernAccessAdd .userPickerControl input:focus,
+.modernAccessAdd .userPickerControl input:focus-visible{
+  width:100%;
+  height:34px;
+  min-width:0;
+  border:0;
+  outline:0;
+  box-shadow:none;
+  background:transparent;
+  padding:0 10px;
+  color:#172033;
+  font-size:12px;
+  font-weight:500;
+}
+.modernAccessAdd .userPickerControl input::placeholder{color:#172033;opacity:1}
+.modernAccessAdd .userPickerArrow{
+  width:42px;
+  height:34px;
+  border:0;
+  outline:0;
+  box-shadow:none;
+  background:transparent;
+  color:#172033;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.modernAccessAdd .userPickerArrowIcon{display:block;transition:transform .16s}
+.modernAccessAdd .userPickerControl.open .userPickerArrowIcon{transform:rotate(180deg)}
+.modernAccessAdd .userPickerControl input:disabled,
+.modernAccessAdd .userPickerArrow:disabled{cursor:not-allowed;opacity:.58}
+
+/* The list opens directly below the select-style search field. */
+.modernAccessAdd .userPickerMenu{top:calc(100% + 6px)}
+.modernAccessAdd .userPickerOptions{padding-top:7px}

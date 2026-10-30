@@ -1,0 +1,35 @@
+.adminLoadingSplash{
+  position:fixed;
+  inset:0;
+  z-index:1000;
+  display:grid;
+  place-items:center;
+  background:rgba(245,247,250,.82);
+  backdrop-filter:blur(5px);
+}
+.adminLoadingSplashCard{
+  min-width:290px;
+  display:grid;
+  grid-template-columns:46px 26px minmax(0,1fr);
+  align-items:center;
+  gap:15px;
+  padding:20px 22px;
+  border:1px solid #dfe6ec;
+  border-radius:15px;
+  background:#fff;
+  box-shadow:0 22px 60px #17203324;
+}
+.adminLoadingBrand{
+  width:46px;
+  height:46px;
+  display:grid;
+  place-items:center;
+  border-radius:12px;
+  background:linear-gradient(145deg,#117f70,#23a994);
+  color:#fff;
+  font-size:20px;
+  font-weight:800;
+}
+.adminLoadingSplashCard>div:last-child{display:flex;flex-direction:column;gap:3px}
+.adminLoadingSplashCard b{font-size:13px;color:#172033}
+.adminLoadingSplashCard span:last-child{font-size:11px;color:#778397}

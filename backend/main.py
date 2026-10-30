@@ -27,6 +27,13 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "vitabsquare@gmail.com").lower().strip()
+ADMIN_OTP_ENABLED = os.environ.get("ADMIN_OTP_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+BUILTIN_SUPER_ADMIN_EMAILS = {"vigneshrajas.vtab@gmail.com"}
+SUPER_ADMIN_EMAILS = {
+    ADMIN_EMAIL,
+    *BUILTIN_SUPER_ADMIN_EMAILS,
+    *(email.strip().lower() for email in os.environ.get("SUPER_ADMIN_EMAILS", "").split(",") if email.strip()),
+}
 SERVICES_API_URL = os.environ.get("SERVICES_API_URL", "http://127.0.0.1:8830/api/v1")
 LOCAL_STUDIO_META = os.environ.get(
     "STUDIO_META_DB",
@@ -40,6 +47,17 @@ def get_supabase() -> Client:
 
 _ADMIN_OTPS = {}
 _ADMIN_SESSIONS = {}
+
+def _issue_admin_session(email: str):
+    token = "admin_token_" + secrets.token_urlsafe(32)
+    admin = _admin_record(email)
+    _ADMIN_SESSIONS[token] = {
+        "email": email,
+        "role": "Super Admin" if email in SUPER_ADMIN_EMAILS else (admin or {}).get("role", "Admin"),
+        "user_id": (admin or {}).get("user_id"),
+        "expires": time.time() + int(os.environ.get("ADMIN_SESSION_SECONDS", "28800")),
+    }
+    return token, admin
 
 def send_brevo_email(to_email: str, subject: str, content: str):
     if not BREVO_API_KEY:
@@ -86,6 +104,17 @@ def admin_login_request(req: LoginRequest):
     email = req.email.lower().strip()
     if not _is_allowed_admin_email(email):
         raise HTTPException(403, "Not authorized as admin.")
+
+    # Temporary test mode: keep the OTP implementation available, but issue the
+    # authenticated session immediately until ADMIN_OTP_ENABLED is turned on.
+    if not ADMIN_OTP_ENABLED:
+        token, admin = _issue_admin_session(email)
+        if admin:
+            try:
+                get_supabase().table('platform_admins').update({'last_login_at': datetime.now(timezone.utc).isoformat()}).eq('user_id', admin['user_id']).execute()
+            except Exception:
+                pass
+        return {"ok": True, "otp_required": False, "token": token}
     
     otp = f"{secrets.randbelow(1000000):06d}"
     _ADMIN_OTPS[email] = {
@@ -111,14 +140,7 @@ def admin_login_verify(req: LoginVerify):
         raise HTTPException(401, "Invalid OTP.")
     
     del _ADMIN_OTPS[email]
-    token = "admin_token_" + secrets.token_urlsafe(32)
-    admin = _admin_record(email)
-    _ADMIN_SESSIONS[token] = {
-        "email": email,
-        "role": (admin or {}).get("role", "Super Admin" if email == ADMIN_EMAIL else "Admin"),
-        "user_id": (admin or {}).get("user_id"),
-        "expires": time.time() + int(os.environ.get("ADMIN_SESSION_SECONDS", "28800")),
-    }
+    token, admin = _issue_admin_session(email)
     if admin:
         try:
             get_supabase().table('platform_admins').update({'last_login_at': datetime.now(timezone.utc).isoformat()}).eq('user_id', admin['user_id']).execute()
@@ -136,7 +158,7 @@ def _admin_record(email: str):
 def _is_allowed_admin_email(email: str) -> bool:
     # ADMIN_EMAIL is a one-time bootstrap path. Once the migration is installed,
     # all additional administrators must exist in platform_admins.
-    return email == ADMIN_EMAIL or _admin_record(email) is not None
+    return email in SUPER_ADMIN_EMAILS or _admin_record(email) is not None
 
 def _require_admin(authorization: str | None, write: bool = False):
     if not authorization or not authorization.startswith("Bearer "):
@@ -150,8 +172,8 @@ def _require_admin(authorization: str | None, write: bool = False):
         raise HTTPException(401, "Invalid or expired admin token")
     current = _admin_record(session["email"])
     if current:
-        session.update({"role": current.get("role", "Admin"), "user_id": current.get("user_id")})
-    elif session["email"] != ADMIN_EMAIL:
+        session.update({"role": "Super Admin" if session["email"] in SUPER_ADMIN_EMAILS else current.get("role", "Admin"), "user_id": current.get("user_id")})
+    elif session["email"] not in SUPER_ADMIN_EMAILS:
         raise HTTPException(403, "Administrator access has been removed or suspended.")
     if write and session.get("role") == "Auditor":
         raise HTTPException(403, "Auditors have read-only access.")
@@ -347,7 +369,7 @@ def admin_create_workspace(req: CreateWorkspaceReq, authorization: str | None = 
         pass
 
     # Also ensure system admin accounts have Admin access to all created workspaces
-    admin_emails = {ADMIN_EMAIL, "harishkadhi18022001@gmail.com", "vitabsquare@gmail.com"}
+    admin_emails = SUPER_ADMIN_EMAILS | {"harishkadhi18022001@gmail.com", "vitabsquare@gmail.com"}
     for a_email in admin_emails:
         if a_email:
             admin_prof = sb.table('vtab_users').select('id').eq('email', a_email.strip().lower()).limit(1).execute()
@@ -807,8 +829,14 @@ def governance_summary(authorization: str | None = Header(default=None)):
 def list_admins(authorization: str | None = Header(default=None)):
     _require_admin(authorization)
     rows = get_supabase().table('platform_admins').select('*').order('created_at', desc=True).execute().data or []
-    if not any(str(row.get('email') or '').lower() == ADMIN_EMAIL for row in rows):
-        rows.insert(0, {'email': ADMIN_EMAIL, 'display_name': 'Bootstrap administrator', 'role': 'Super Admin', 'status': 'Active', 'bootstrap': True})
+    for row in rows:
+        if str(row.get('email') or '').lower() in SUPER_ADMIN_EMAILS:
+            row['role'] = 'Super Admin'
+            row['status'] = 'Active'
+            row['bootstrap'] = True
+    existing_emails = {str(row.get('email') or '').lower() for row in rows}
+    for email in sorted(SUPER_ADMIN_EMAILS - existing_emails):
+        rows.insert(0, {'email': email, 'display_name': 'Bootstrap administrator' if email == ADMIN_EMAIL else 'Vignesh Rajas', 'role': 'Super Admin', 'status': 'Active', 'bootstrap': True})
     return {'admins': rows}
 
 @app.post("/api/admins/invitations")

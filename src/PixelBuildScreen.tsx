@@ -281,6 +281,27 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
             >
               [MINIMIZE]
             </button>
+            <button
+              onClick={() => {
+                try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
+                if (onComplete) onComplete();
+                else window.location.reload();
+              }}
+              style={{
+                background: 'rgba(239, 68, 68, 0.2)',
+                border: '1px solid #ef4444',
+                color: '#f87171',
+                padding: '2px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                borderRadius: 2,
+                fontWeight: 700
+              }}
+              title="Exit build screen"
+            >
+              [EXIT]
+            </button>
           </div>
         </div>
 

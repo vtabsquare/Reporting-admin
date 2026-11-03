@@ -103,7 +103,8 @@ def send_brevo_email(to_email: str, subject: str, content: str):
     }
     response = httpx.post(url, headers=headers, json=data)
     if response.status_code >= 300:
-        raise ValueError(f"Failed to send email: {response.text}")
+        key_info = f"(Key len={len(api_key)}, prefix={api_key[:10]}..., suffix=...{api_key[-4:] if len(api_key)>=4 else api_key})"
+        raise ValueError(f"Failed to send email: {response.text} {key_info}")
 
 class LoginRequest(BaseModel):
     email: str

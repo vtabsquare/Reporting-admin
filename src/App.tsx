@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import './App.css';
 import './AdminLoading.css';
 import WorkspaceDetailWithPermissions from './WorkspaceDetailWithPermissions';
+import { PixelBuildScreen } from './PixelBuildScreen';
 
 type Tab = 'overview'|'workspaces'|'users'|'groups'|'audit'|'tickets'|'settings';
 type User = {id:string;email:string;display_name?:string;group_count?:number;admin?:{role:string;status:string}};
@@ -11,7 +12,9 @@ type UiPermissions = {all_commands:boolean;can_file:boolean;can_home:boolean;can
 type Member = {user_id:string;role:string;is_owner?:boolean;vtab_users?:User;access_sources?:string[];ui_permissions?:UiPermissions};
 type AuditEvent = {id:string;created_at:string;action:string;category:string;status?:string;object_type?:string;object_id?:string;details?:Record<string,unknown>};
 
-const API='http://127.0.0.1:8000/api';
+const API = (typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173')
+  ? 'http://127.0.0.1:8000/api'
+  : '/api';
 const paths:Record<string,string>={overview:'M3 13h8V3H3v10Zm10 8h8V11h-8v10ZM3 21h8v-6H3v6Zm10-12h8V3h-8v6Z',workspaces:'M3 7h7l2 2h9v10H3V7Z',users:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8',groups:'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8m11 1v6m3-3h-6',audit:'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',tickets:'M4 4h16v16H4V4Zm4 4h8M8 12h8M8 16h5',settings:'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7-3.5 2-1.5-2-3.5-2.5 1L15 6l-.3-3h-5L9.5 6 8 7 5.5 6 3.5 9.5 5.5 11a7 7 0 0 0 0 2l-2 1.5 2 3.5L8 17l1.5 1 .3 3h5l.3-3 1.5-1 2.5 1 2-3.5-2-1.5a7 7 0 0 0 0-1Z',search:'M21 21l-4.3-4.3M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z',plus:'M12 5v14M5 12h14',close:'M18 6 6 18M6 6l12 12',arrow:'M19 12H5m7-7-7 7 7 7',logout:'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9'};
 function Icon({name,size=18}:{name:string,size?:number}){return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]||paths.overview}/></svg>}
 const initials=(v='')=>v.split(/\s|@/).filter(Boolean).slice(0,2).map(x=>x[0]?.toUpperCase()).join('')||'U';
@@ -24,11 +27,38 @@ export default function App(){
  const[tab,setTab]=useState<Tab>('overview'),[busy,setBusy]=useState(false),[workspaceUsersBusy,setWorkspaceUsersBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState(''),[query,setQuery]=useState(''),[modal,setModal]=useState<string|null>(null);
  const[users,setUsers]=useState<User[]>([]),[workspaces,setWorkspaces]=useState<Workspace[]>([]),[groups,setGroups]=useState<Group[]>([]),[audit,setAudit]=useState<AuditEvent[]>([]),[tickets,setTickets]=useState<any[]>([]),[admins,setAdmins]=useState<any[]>([]),[summary,setSummary]=useState<any>({});
  const[selectedWorkspace,setSelectedWorkspace]=useState<Workspace|null>(null),[members,setMembers]=useState<Member[]>([]),[selectedGroup,setSelectedGroup]=useState<Group|null>(null),[form,setForm]=useState<Record<string,any>>({role:'Viewer',adminRole:'Admin'});
+ const[updateStatus,setUpdateStatus]=useState<{update_available?:boolean;available_version?:string;release_notes?:string;applying?:boolean;last_apply_status?:string;current_version?:string}|null>(null);
+ const[isBuildingUpdate,setIsBuildingUpdate]=useState<boolean>(()=>{
+   try { return Boolean(localStorage.getItem('vtab_admin_building_update')); } catch { return false; }
+ });
  async function req(path:string,init:RequestInit={}){const response=await fetch(API+path,{...init,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{ }),...(init.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.detail||data.error||`Request failed (${response.status})`);return data}
  const ok=(text:string)=>{setMessage(text);setError('');setTimeout(()=>setMessage(''),3500)},fail=(e:any)=>{setError(e?.message||String(e));setMessage('')};
+ async function checkUpdate(){
+   try{
+     const d=await req('/update/status');
+     setUpdateStatus(d);
+     if (d.last_apply_status === 'succeeded' || (!d.update_available && !d.applying && localStorage.getItem('vtab_admin_building_update'))) {
+       try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
+       setIsBuildingUpdate(false);
+     }
+   }catch{}
+ }
+ async function applyUpdate(){
+   const targetVer = updateStatus?.available_version || 'latest';
+   if(!confirm(`Apply update to version ${targetVer}? The cloud container will be rebuilt on Render.`))return;
+   try{
+     try { localStorage.setItem('vtab_admin_building_update', targetVer); } catch {}
+     setIsBuildingUpdate(true);
+     await req('/update/apply',{method:'POST'});
+   }catch(e:any){
+     try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
+     setIsBuildingUpdate(false);
+     fail(e);
+   }
+ }
  async function load(){if(!token)return;setBusy(true);try{const[s,u,w,g,a,t,ad]=await Promise.all([req('/session'),req('/users'),req('/workspaces'),req('/groups'),req('/audit?limit=300'),req('/support-requests'),req('/admins')]);setSession(s);setUsers(u.users||[]);const teamWorkspaces=(w.workspaces||[]).filter((item:any)=>!item.is_personal&&String(item.name||'').trim().toLowerCase()!=='my workspace').sort((left:any,right:any)=>String(left.name||'').localeCompare(String(right.name||'')));setWorkspaces(teamWorkspaces);setGroups(g.groups||[]);setAudit(a.events||[]);setTickets(t.requests||[]);setAdmins(ad.admins||[]);try{setSummary(await req('/governance/summary'))}catch{setSummary({})}}catch(e:any){if(/token|expired/i.test(e.message))logout();else fail(e)}finally{setBusy(false)}}
- useEffect(()=>{void load()},[token]);
- async function login(){setBusy(true);try{if(step==='email'){const d=await req('/auth/login-request',{method:'POST',body:JSON.stringify({email})});if(d.otp_required===false&&d.token){localStorage.setItem('adminToken',d.token);setToken(d.token);ok('Signed in for testing')}else{setStep('otp');ok('Verification code sent')}}else{const d=await req('/auth/login-verify',{method:'POST',body:JSON.stringify({email,otp})});localStorage.setItem('adminToken',d.token);setToken(d.token)}}catch(e){fail(e)}finally{setBusy(false)}}
+ useEffect(()=>{void load();void checkUpdate();const t=setInterval(checkUpdate,5000);return()=>clearInterval(t);},[token]);
+ async function login(){setBusy(true);try{if(step==='email'){await req('/auth/login-request',{method:'POST',body:JSON.stringify({email})});setStep('otp');ok('Verification code sent')}else{const d=await req('/auth/login-verify',{method:'POST',body:JSON.stringify({email,otp})});localStorage.setItem('adminToken',d.token);setToken(d.token)}}catch(e){fail(e)}finally{setBusy(false)}}
  function logout(){localStorage.removeItem('adminToken');setToken('');setSession(null);setStep('email');setOtp('')}
  async function openWorkspace(w:Workspace){const d=await req(`/workspaces/${w.id}/members`);setMembers(d.members||[]);setSelectedWorkspace(w);try{const p=await req(`/workspaces/${w.id}/notification-policy`);setForm(x=>({...x,...p.policy}))}catch{}}
  async function updateUiPermissions(userId:string,next:UiPermissions){if(!selectedWorkspace)return;const previous=members.find(member=>member.user_id===userId)?.ui_permissions;setMembers(current=>current.map(member=>member.user_id===userId?{...member,ui_permissions:next}:member));try{await req(`/workspaces/${selectedWorkspace.id}/members/${userId}/ui-permissions`,{method:'PUT',body:JSON.stringify(next)});ok('Report command permissions updated')}catch(error){setMembers(current=>current.map(member=>member.user_id===userId?{...member,ui_permissions:previous}:member));fail(error)}}
@@ -40,7 +70,19 @@ export default function App(){
 
  const nav:Array<[Tab,string,string]>=[['overview','Overview','overview'],['workspaces','Workspaces','workspaces'],['users','Users','users'],['groups','Access groups','groups'],['audit','Audit trail','audit'],['tickets','Support tickets','tickets'],['settings','Settings','settings']];
  const filter=(value:string)=>value.toLowerCase().includes(query.toLowerCase());
- return <div className="shell">{(busy||workspaceUsersBusy)&&<LoadingSplash/>}<aside className="sidebar"><div className="brand sidebar-brand"><span>V</span><div>VTAB<small>Governance console</small></div></div><nav>{nav.map(([id,label,icon])=><button key={id} className={tab===id?'active':''} onClick={()=>{setTab(id);setQuery('');setSelectedWorkspace(null);setSelectedGroup(null)}}><Icon name={icon}/><span>{label}</span>{id==='tickets'&&openTicketCount(tickets)>0&&<em>{openTicketCount(tickets)}</em>}</button>)}</nav><div className="sidebar-user"><div className="avatar">{initials(session?.email)}</div><div><b>{session?.role||'Administrator'}</b><small>{session?.email}</small></div><button title="Sign out" onClick={logout}><Icon name="logout"/></button></div></aside><main><header className="topbar"><div><h1>{nav.find(n=>n[0]===tab)?.[1]}</h1><p>{tab==='overview'?'Platform health and governance activity':tab==='audit'?'Publish, refresh, alert and administration history':tab==='groups'?'Reusable user collections for workspace access':'Manage your reporting environment'}</p></div><div className="top-actions">{tab!=='overview'&&<div className="search"><Icon name="search" size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${tab}…`}/></div>}<button className="icon-button" title="Refresh" onClick={load}>↻</button></div></header><div className="content">{message&&<div className="notice success">{message}</div>}{error&&<div className="notice error"><span>{error}</span><button onClick={()=>setError('')}>×</button></div>}
+ return <div className="shell">
+  {isBuildingUpdate && (
+    <PixelBuildScreen
+      targetVersion={updateStatus?.available_version || (typeof localStorage !== 'undefined' ? localStorage.getItem('vtab_admin_building_update') || '' : '') || 'latest'}
+      apiUrl={API}
+      onComplete={() => {
+        try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
+        setIsBuildingUpdate(false);
+        window.location.reload();
+      }}
+    />
+  )}
+  <aside className="sidebar"><div className="brand sidebar-brand"><span>V</span><div>VTAB<small>Governance console</small></div></div><nav>{nav.map(([id,label,icon])=><button key={id} className={tab===id?'active':''} onClick={()=>{setTab(id);setQuery('');setSelectedWorkspace(null);setSelectedGroup(null)}}><Icon name={icon}/><span>{label}</span>{id==='tickets'&&openTicketCount(tickets)>0&&<em>{openTicketCount(tickets)}</em>}</button>)}</nav><div className="sidebar-user"><div className="avatar">{initials(session?.email)}</div><div><b>{session?.role||'Administrator'}</b><small>{session?.email}</small></div><button title="Sign out" onClick={logout}><Icon name="logout"/></button></div></aside><main><header className="topbar"><div><h1>{nav.find(n=>n[0]===tab)?.[1]}</h1><p>{tab==='overview'?'Platform health and governance activity':tab==='audit'?'Publish, refresh, alert and administration history':tab==='groups'?'Reusable user collections for workspace access':'Manage your reporting environment'}</p></div><div className="top-actions">{tab!=='overview'&&<div className="search"><Icon name="search" size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${tab}…`}/></div>}<button className="icon-button" title="Refresh" onClick={load}>↻</button></div></header><div className="content">{updateStatus?.update_available&&<div className="update-banner"><span>🔔 <strong>Update available:</strong> VTAB Admin Console v{updateStatus.available_version}{updateStatus.applying?' — Building on server…':''}</span>{!updateStatus.applying&&<button className="primary" style={{marginLeft:'auto',padding:'0.35rem 1rem',fontSize:'0.825rem',fontWeight:600}} onClick={applyUpdate} disabled={busy}>Update Now</button>}{updateStatus.applying&&updateStatus.last_apply_status&&<span style={{marginLeft:'auto',opacity:0.85,fontSize:'0.825rem'}}>{updateStatus.last_apply_status}</span>}</div>}{message&&<div className="notice success">{message}</div>}{error&&<div className="notice error"><span>{error}</span><button onClick={()=>setError('')}>×</button></div>}{busy&&<div className="progress"/>}
 
  {tab==='overview'&&<><div className="metric-grid">{[['Users',summary.users??users.length,'users'],['Team workspaces',summary.workspaces??workspaces.length,'workspaces'],['Access groups',summary.groups??groups.length,'groups'],['Active admins',summary.active_admins??admins.filter(a=>a.status==='Active').length,'settings']].map(([l,v,i])=><article className="metric" key={String(l)}><div className="metric-icon"><Icon name={String(i)}/></div><div><small>{l}</small><strong>{String(v)}</strong></div></article>)}</div><div className="two-col"><Panel title="Recent governance activity" action={<button className="text-button" onClick={()=>setTab('audit')}>View audit trail →</button>}><AuditTable rows={audit.slice(0,7)}/></Panel><Panel title="Environment posture"><div className="posture"><Posture label="Token-verified admin enrollment" ok/><Posture label="Personal workspace provisioning" ok/><Posture label="Group access synchronization" ok/><Posture label="Failed refreshes" ok={(summary.failed_refreshes||0)===0} detail={`${summary.failed_refreshes||0} requiring attention`}/><Posture label="Open support tickets" ok={openTicketCount(tickets)===0} detail={`${openTicketCount(tickets)} open`}/></div></Panel></div></>}
 

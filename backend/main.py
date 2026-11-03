@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -10,6 +10,8 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import threading
+from update_agent import start_update_agent, get_update_status, trigger_apply
 
 load_dotenv()
 
@@ -22,6 +24,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_VTAB_MANAGER_URL = os.environ.get("VTAB_MANAGER_URL", "").strip()
+_VTAB_CLIENT_ID = os.environ.get("VTAB_CLIENT_ID", "").strip()
+_VTAB_AGENT_TOKEN = os.environ.get("VTAB_AGENT_TOKEN", "").strip()
+if _VTAB_MANAGER_URL and _VTAB_CLIENT_ID and _VTAB_AGENT_TOKEN:
+    start_update_agent()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -1035,6 +1043,58 @@ def remove_group_workspace(group_id: str, workspace_id: str, authorization: str 
         _apply_effective_membership(sb, workspace_id, link['user_id'])
     _audit('workspace.group.remove', 'user_group', group_id, actor, {}, workspace_id)
     return {'ok': True}
+
+
+@app.get("/api/v1/update/status")
+@app.get("/api/update/status")
+def admin_update_status():
+    return get_update_status()
+
+@app.post("/api/v1/update/apply")
+@app.post("/api/update/apply")
+def admin_apply_update(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_vtab_agent_token: str | None = Header(default=None),
+):
+    agent_token = (x_vtab_agent_token or request.headers.get("x-vtab-agent-token") or "").strip()
+    expected_token = os.environ.get("VTAB_AGENT_TOKEN", "").strip()
+    is_agent = bool(expected_token and agent_token and secrets.compare_digest(agent_token, expected_token))
+    if not is_agent:
+        _require_admin(authorization)  # only admins can trigger an update
+    if get_update_status().get("applying"):
+        raise HTTPException(409, "An update is already in progress.")
+    threading.Thread(target=trigger_apply, daemon=True).start()
+    return {"ok": True, "message": "Update triggered. Poll /api/update/status for progress."}
+
+@app.post("/api/v1/update/webhook")
+@app.post("/api/update/webhook")
+async def admin_update_webhook(request: Request):
+    from update_agent import handle_webhook
+    body = await request.json()
+    return handle_webhook(body)
+
+
+# Mount static React SPA frontend for cloud deployments
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response
+
+_DIST = Path(__file__).resolve().parent.parent / "dist"
+if (_DIST / "index.html").is_file():
+    if (_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="admin_assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_admin_spa(full_path: str):
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(404, "API route not found")
+        target = (_DIST / full_path).resolve()
+        if full_path and target.is_file() and str(target).startswith(str(_DIST.resolve())):
+            return FileResponse(target)
+        index_file = _DIST / "index.html"
+        html = index_file.read_text(encoding="utf-8")
+        return Response(content=html, media_type="text/html")
 
 
 if __name__ == "__main__":

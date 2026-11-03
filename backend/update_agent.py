@@ -297,7 +297,7 @@ def _trigger_render_deploy() -> dict:
     service_id = (
         os.environ.get("RENDER_SERVICE_ID")
         or os.environ.get("VTAB_RENDER_SERVICE_ID")
-        or "srv-dbksbt6k1f9s73dseub0"
+        or "srv-dbku80h42hec73dbpjkg"
     ).strip()
 
     if not api_key:

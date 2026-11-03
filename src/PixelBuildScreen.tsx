@@ -21,7 +21,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [logs, setLogs] = useState<string[]>([
     '> [00:00] INITIALIZING VTAB ADMIN CONSOLE BUILD AGENT...',
-    '> [00:02] DISPATCHING RENDER API DEPLOY HOOK (srv-dbksbt6k1f9s73dseub0)...'
+    '> [00:02] DISPATCHING RENDER API DEPLOY HOOK (srv-dbku80h42hec73dbpjkg)...'
   ]);
   const [minimized, setMinimized] = useState(false);
 

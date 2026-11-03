@@ -42,11 +42,16 @@ _VTAB_AGENT_TOKEN = os.environ.get("VTAB_AGENT_TOKEN", "").strip()
 if _VTAB_MANAGER_URL and _VTAB_CLIENT_ID and _VTAB_AGENT_TOKEN:
     start_update_agent()
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "harishkadhi18022001@gmail.com").lower().strip()
-ADMIN_OTP_ENABLED = os.environ.get("ADMIN_OTP_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+def _clean_str(val: str | None) -> str:
+    if not val:
+        return ""
+    return str(val).strip().strip('"').strip("'").strip()
+
+SUPABASE_URL = _clean_str(os.environ.get("SUPABASE_URL"))
+SUPABASE_KEY = _clean_str(os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
+BREVO_API_KEY = _clean_str(os.environ.get("BREVO_API_KEY"))
+ADMIN_EMAIL = _clean_str(os.environ.get("ADMIN_EMAIL", "harishkadhi18022001@gmail.com")).lower()
+ADMIN_OTP_ENABLED = _clean_str(os.environ.get("ADMIN_OTP_ENABLED", "1")).lower() in {"1", "true", "yes", "on"}
 BUILTIN_SUPER_ADMIN_EMAILS = {"vigneshrajas.vtab@gmail.com", "vitabsquare@gmail.com", "harishkadhi18022001@gmail.com"}
 SUPER_ADMIN_EMAILS = {
     ADMIN_EMAIL,
@@ -79,19 +84,20 @@ def _issue_admin_session(email: str):
     return token, admin
 
 def send_brevo_email(to_email: str, subject: str, content: str):
-    if not BREVO_API_KEY:
-        raise ValueError("BREVO_API_KEY is not configured in .env")
+    api_key = _clean_str(os.environ.get("BREVO_API_KEY") or BREVO_API_KEY)
+    if not api_key:
+        raise ValueError("BREVO_API_KEY is not configured in environment variables.")
     
     url = "https://api.brevo.com/v3/smtp/email"
     headers = {
         "accept": "application/json",
-        "api-key": BREVO_API_KEY,
+        "api-key": api_key,
         "content-type": "application/json"
     }
-    sender_email = (os.environ.get("VTAB_SMTP_FROM") or os.environ.get("BREVO_SENDER_EMAIL") or "aivtabsquare@gmail.com").strip()
+    sender_email = _clean_str(os.environ.get("VTAB_SMTP_FROM") or os.environ.get("BREVO_SENDER_EMAIL") or "aivtabsquare@gmail.com")
     data = {
         "sender": {"email": sender_email, "name": "VTAB Admin"},
-        "to": [{"email": to_email}],
+        "to": [{"email": to_email.strip()}],
         "subject": subject,
         "textContent": content
     }

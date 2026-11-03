@@ -45,9 +45,9 @@ if _VTAB_MANAGER_URL and _VTAB_CLIENT_ID and _VTAB_AGENT_TOKEN:
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "vitabsquare@gmail.com").lower().strip()
-ADMIN_OTP_ENABLED = os.environ.get("ADMIN_OTP_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
-BUILTIN_SUPER_ADMIN_EMAILS = {"vigneshrajas.vtab@gmail.com"}
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "harishkadhi18022001@gmail.com").lower().strip()
+ADMIN_OTP_ENABLED = os.environ.get("ADMIN_OTP_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+BUILTIN_SUPER_ADMIN_EMAILS = {"vigneshrajas.vtab@gmail.com", "vitabsquare@gmail.com", "harishkadhi18022001@gmail.com"}
 SUPER_ADMIN_EMAILS = {
     ADMIN_EMAIL,
     *BUILTIN_SUPER_ADMIN_EMAILS,
@@ -88,8 +88,9 @@ def send_brevo_email(to_email: str, subject: str, content: str):
         "api-key": BREVO_API_KEY,
         "content-type": "application/json"
     }
+    sender_email = (os.environ.get("VTAB_SMTP_FROM") or os.environ.get("BREVO_SENDER_EMAIL") or "aivtabsquare@gmail.com").strip()
     data = {
-        "sender": {"email": os.environ.get("VTAB_SMTP_FROM", "no-reply@vtab.com"), "name": "VTAB Admin"},
+        "sender": {"email": sender_email, "name": "VTAB Admin"},
         "to": [{"email": to_email}],
         "subject": subject,
         "textContent": content

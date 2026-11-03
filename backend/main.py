@@ -10,8 +10,19 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import sys
+from pathlib import Path
 import threading
-from update_agent import start_update_agent, get_update_status, trigger_apply
+
+# Ensure backend directory is in sys.path regardless of where uvicorn is launched
+_BACKEND_DIR = str(Path(__file__).resolve().parent)
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+try:
+    from update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook
+except ImportError:
+    from backend.update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook
 
 load_dotenv()
 
@@ -1070,7 +1081,6 @@ def admin_apply_update(
 @app.post("/api/v1/update/webhook")
 @app.post("/api/update/webhook")
 async def admin_update_webhook(request: Request):
-    from update_agent import handle_webhook
     body = await request.json()
     return handle_webhook(body)
 

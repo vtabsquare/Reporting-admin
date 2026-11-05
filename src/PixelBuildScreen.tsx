@@ -13,15 +13,25 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
   onComplete,
   onMinimize
 }) => {
+  const isDO = typeof window !== 'undefined' && (
+    window.location.hostname.includes('vtabsquare.com') ||
+    window.location.hostname.includes('139.59.32.39') ||
+    window.location.hostname.includes('nip.io') ||
+    window.location.hostname.includes('sslip.io')
+  );
+  const platformName = isDO ? 'DIGITALOCEAN DROPLET' : 'RENDER WEB SERVICE';
+
   const [secondsElapsed, setSecondsElapsed] = useState(0);
   const [progress, setProgress] = useState(5);
-  const [statusMessage, setStatusMessage] = useState('INITIATING CLOUD BUILD MATRIX...');
+  const [statusMessage, setStatusMessage] = useState(isDO ? 'INITIATING DIGITALOCEAN DEPLOY MATRIX...' : 'INITIATING CLOUD BUILD MATRIX...');
   const [isCompleted, setIsCompleted] = useState(false);
   const [isError, setIsError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [logs, setLogs] = useState<string[]>([
-    '> [00:00] INITIALIZING VTAB ADMIN CONSOLE BUILD AGENT...',
-    '> [00:02] DISPATCHING RENDER API DEPLOY HOOK (srv-dbku80h42hec73dbpjkg)...'
+    isDO ? '> [00:00] INITIALIZING VTAB DIGITALOCEAN DEPLOY AGENT...' : '> [00:00] INITIALIZING VTAB ADMIN CONSOLE BUILD AGENT...',
+    isDO
+      ? '> [00:02] DISPATCHING LOCAL SYSTEMD & VITE COMPILER...'
+      : '> [00:02] DISPATCHING RENDER API DEPLOY HOOK (srv-dbku80h42hec73dbpjkg)...'
   ]);
   const [minimized, setMinimized] = useState(false);
 
@@ -60,7 +70,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
     } else if (secondsElapsed === 95) {
       setProgress(88);
       setStatusMessage('STARTING FASTAPI PRODUCTION SERVICE...');
-      setLogs((l) => [...l, `> [${formatTime(secondsElapsed)}] RUNNING UVICORN SERVER ON RENDER CLOUD HOST...`]);
+      setLogs((l) => [...l, `> [${formatTime(secondsElapsed)}] RUNNING UVICORN SERVER ON DIGITALOCEAN DROPLET...`]);
     } else if (secondsElapsed === 115) {
       setProgress(94);
       setStatusMessage('AWAITING SERVICE PORT BINDING (HTTP:8000)...');
@@ -400,7 +410,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
           </div>
 
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, letterSpacing: 1 }}>
-            TARGET COMMIT: <span style={{ color: '#38bdf8' }}>{targetVersion}</span> • CLOUD HOST: RENDER WEB SERVICE
+            TARGET COMMIT: <span style={{ color: '#38bdf8' }}>{targetVersion}</span> • CLOUD HOST: {platformName}
           </div>
         </div>
 
@@ -408,7 +418,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 700 }}>
             <span>PROGRESS: [ {progress}% ]</span>
-            <span>{isCompleted ? 'LIVE READY' : 'BUILDING ON RENDER...'}</span>
+            <span>{isCompleted ? 'LIVE READY' : `BUILDING ON ${isDO ? 'DIGITALOCEAN' : 'RENDER'}...`}</span>
           </div>
 
           <div
@@ -501,7 +511,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
         >
           {isCompleted
             ? 'RELOAD IN PROGRESS... RE-INITIALIZING GOVERNANCE CONSOLE...'
-            : 'Render cloud containers compile in approx. 2 minutes. This screen will automatically reload when the build completes.'}
+            : isDO ? 'DigitalOcean service and Nginx reload complete in approx. 10-15 seconds. This screen will automatically reload when verified.' : 'Render cloud containers compile in approx. 2 minutes. This screen will automatically reload when the build completes.'}
         </div>
       </div>
     </div>

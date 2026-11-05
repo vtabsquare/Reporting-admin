@@ -1,0 +1,17 @@
+[Unit]
+Description=VTAB Admin Console Backend API
+After=network.target
+
+[Service]
+Type=simple
+User=vtab
+WorkingDirectory=/var/www/vtab-admin-console/backend
+EnvironmentFile=/var/www/vtab-admin-console/backend/.env
+ExecStart=/var/www/vtab-admin-console/backend/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

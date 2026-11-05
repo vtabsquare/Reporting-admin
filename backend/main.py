@@ -20,9 +20,9 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 try:
-    from update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook
+    from update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook, cancel_update, complete_update, verify_agent_token
 except ImportError:
-    from backend.update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook
+    from backend.update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook, cancel_update, complete_update, verify_agent_token
 
 load_dotenv()
 
@@ -36,11 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_VTAB_MANAGER_URL = os.environ.get("VTAB_MANAGER_URL", "").strip()
-_VTAB_CLIENT_ID = os.environ.get("VTAB_CLIENT_ID", "").strip()
-_VTAB_AGENT_TOKEN = os.environ.get("VTAB_AGENT_TOKEN", "").strip()
-if _VTAB_MANAGER_URL and _VTAB_CLIENT_ID and _VTAB_AGENT_TOKEN:
-    start_update_agent()
+start_update_agent()
 
 def _clean_str(val: str | None) -> str:
     if not val:
@@ -1077,8 +1073,7 @@ def admin_apply_update(
     x_vtab_agent_token: str | None = Header(default=None),
 ):
     agent_token = (x_vtab_agent_token or request.headers.get("x-vtab-agent-token") or "").strip()
-    expected_token = os.environ.get("VTAB_AGENT_TOKEN", "").strip()
-    is_agent = bool(expected_token and agent_token and secrets.compare_digest(agent_token, expected_token))
+    is_agent = verify_agent_token(agent_token)
     if not is_agent:
         _require_admin(authorization)  # only admins can trigger an update
     if get_update_status().get("applying"):
@@ -1086,8 +1081,40 @@ def admin_apply_update(
     threading.Thread(target=trigger_apply, daemon=True).start()
     return {"ok": True, "message": "Update triggered. Poll /api/update/status for progress."}
 
+@app.post("/api/v1/update/cancel")
+@app.post("/api/update/cancel")
+def admin_cancel_update(
+    request: Request,
+    payload: dict | None = None,
+    authorization: str | None = Header(default=None),
+    x_vtab_agent_token: str | None = Header(default=None),
+):
+    agent_token = (x_vtab_agent_token or request.headers.get("x-vtab-agent-token") or "").strip()
+    is_agent = verify_agent_token(agent_token)
+    if not is_agent:
+        _require_admin(authorization)
+    reason = str((payload or {}).get("reason") or "Update offer cancelled.")
+    return cancel_update(reason)
+
+@app.post("/api/v1/update/complete")
+@app.post("/api/update/complete")
+def admin_complete_update(
+    request: Request,
+    payload: dict | None = None,
+    authorization: str | None = Header(default=None),
+    x_vtab_agent_token: str | None = Header(default=None),
+):
+    agent_token = (x_vtab_agent_token or request.headers.get("x-vtab-agent-token") or "").strip()
+    is_agent = verify_agent_token(agent_token)
+    if not is_agent:
+        _require_admin(authorization)
+    p = payload or {}
+    return complete_update(p.get("commit_sha") or p.get("commitSha"), p.get("version"))
+
 @app.post("/api/v1/update/webhook")
 @app.post("/api/update/webhook")
+@app.post("/api/v1/update/offer")
+@app.post("/api/update/offer")
 async def admin_update_webhook(request: Request):
     body = await request.json()
     return handle_webhook(body)

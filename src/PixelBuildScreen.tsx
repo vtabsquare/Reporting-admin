@@ -79,7 +79,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
         const res = await fetch(`${apiUrl}/update/status`).then((r) => (r.ok ? r.json() : null));
         if (unmounted || !res) return;
 
-        if (res.last_apply_status === 'succeeded' || (secondsElapsed > 25 && res.update_available === false && !res.applying)) {
+        if (res.last_apply_status === 'succeeded' || res.status === 'completed' || (secondsElapsed > 15 && res.update_available === false && !res.applying)) {
           triggerSuccess();
           return;
         }

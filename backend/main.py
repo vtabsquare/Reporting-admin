@@ -1116,7 +1116,14 @@ def admin_complete_update(
 @app.post("/api/v1/update/offer")
 @app.post("/api/update/offer")
 async def admin_update_webhook(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raw = await request.body()
+        try:
+            body = json.loads(raw.decode("utf-8", errors="ignore"))
+        except Exception:
+            body = {}
     return handle_webhook(body)
 
 

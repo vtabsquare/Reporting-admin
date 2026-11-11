@@ -40,6 +40,7 @@ export default function App(){
      if (d.last_apply_status === 'succeeded' || (!d.update_available && !d.applying && localStorage.getItem('vtab_admin_building_update'))) {
        try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
        setIsBuildingUpdate(false);
+       window.location.reload();
      }
    }catch{}
  }

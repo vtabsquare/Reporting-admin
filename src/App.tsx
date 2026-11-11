@@ -31,7 +31,17 @@ export default function App(){
  const[isBuildingUpdate,setIsBuildingUpdate]=useState<boolean>(()=>{
    try { return Boolean(localStorage.getItem('vtab_admin_building_update')); } catch { return false; }
  });
- async function req(path:string,init:RequestInit={}){const response=await fetch(API+path,{...init,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{ }),...(init.headers||{})}});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.detail||data.error||`Request failed (${response.status})`);return data}
+ async function req(path:string,init:RequestInit={}){
+   const response=await fetch(API+path,{...init,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{ }),...(init.headers||{})}});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok){
+     if(response.status===401&&!path.startsWith('/auth')&&path!=='/update/status'){
+       logout();
+     }
+     throw new Error(data.detail||data.error||`Request failed (${response.status})`);
+   }
+   return data
+ }
  const ok=(text:string)=>{setMessage(text);setError('');setTimeout(()=>setMessage(''),3500)},fail=(e:any)=>{setError(e?.message||String(e));setMessage('')};
  async function checkUpdate(){
    try{
@@ -61,7 +71,7 @@ export default function App(){
      }
    }
  }
- async function load(){if(!token)return;setBusy(true);try{const[s,u,w,g,a,t,ad]=await Promise.all([req('/session').catch(()=>null),req('/users').catch(()=>({users:[]})),req('/workspaces').catch(()=>({workspaces:[]})),req('/groups').catch(()=>({groups:[]})),req('/audit?limit=300').catch(()=>({events:[]})),req('/support-requests').catch(()=>({requests:[]})),req('/admins').catch(()=>({admins:[]}))]);if(s)setSession(s);setUsers(u?.users||[]);const teamWorkspaces=(w?.workspaces||[]).filter((item:any)=>!item.is_personal&&String(item.name||'').trim().toLowerCase()!=='my workspace').sort((left:any,right:any)=>String(left.name||'').localeCompare(String(right.name||'')));setWorkspaces(teamWorkspaces);setGroups(g?.groups||[]);setAudit(a?.events||[]);setTickets(t?.requests||[]);setAdmins(ad?.admins||[]);try{setSummary(await req('/governance/summary'))}catch{setSummary({})}}catch(e:any){if(/token|expired/i.test(e.message))logout();else fail(e)}finally{setBusy(false)}}
+ async function load(){if(!token)return;setBusy(true);try{const s=await req('/session');setSession(s);const[u,w,g,a,t,ad]=await Promise.all([req('/users').catch(()=>({users:[]})),req('/workspaces').catch(()=>({workspaces:[]})),req('/groups').catch(()=>({groups:[]})),req('/audit?limit=300').catch(()=>({events:[]})),req('/support-requests').catch(()=>({requests:[]})),req('/admins').catch(()=>({admins:[]}))]);setUsers(u?.users||[]);const teamWorkspaces=(w?.workspaces||[]).filter((item:any)=>!item.is_personal&&String(item.name||'').trim().toLowerCase()!=='my workspace').sort((left:any,right:any)=>String(left.name||'').localeCompare(String(right.name||'')));setWorkspaces(teamWorkspaces);setGroups(g?.groups||[]);setAudit(a?.events||[]);setTickets(t?.requests||[]);setAdmins(ad?.admins||[]);try{setSummary(await req('/governance/summary'))}catch{setSummary({})}}catch(e:any){if(/token|expired|401/i.test(e.message))logout();else fail(e)}finally{setBusy(false)}}
  useEffect(()=>{void load();void checkUpdate();const t=setInterval(checkUpdate,5000);return()=>clearInterval(t);},[token]);
  async function login(){setBusy(true);try{if(step==='email'){const d=await req('/auth/login-request',{method:'POST',body:JSON.stringify({email})});if(d.otp_required===false&&d.token){localStorage.setItem('adminToken',d.token);setToken(d.token);ok('Signed in successfully')}else{setStep('otp');ok('Verification code sent')}}else{const d=await req('/auth/login-verify',{method:'POST',body:JSON.stringify({email,otp})});localStorage.setItem('adminToken',d.token);setToken(d.token)}}catch(e){fail(e)}finally{setBusy(false)}}
 

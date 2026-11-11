@@ -69,10 +69,12 @@ if [ -f "package.json" ]; then
 fi
 
 # 5. Reload systemd unit & Nginx proxy
-echo "[5/5] Restarting service & reloading Nginx..."
+echo "[5/5] Reloading Nginx & scheduling backend restart..."
 systemctl daemon-reload 2>/dev/null || true
-systemctl restart reportingtool-admin.service 2>/dev/null || true
 nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+
+# Schedule service restart in background after a brief delay so update_agent can finish reporting success
+(sleep 3 && systemctl restart reportingtool-admin.service) >/dev/null 2>&1 &
 
 echo "================================================================="
 echo "  VTAB Admin Console Deployed & Verified Healthy!"

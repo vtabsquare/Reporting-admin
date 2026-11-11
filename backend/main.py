@@ -66,9 +66,34 @@ def get_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 _ADMIN_OTPS = {}
-_ADMIN_SESSIONS = {}
+_SESSIONS_FILE = Path(__file__).resolve().parent / ".admin_sessions.json"
+
+def _load_admin_sessions() -> dict:
+    if not _SESSIONS_FILE.is_file():
+        return {}
+    try:
+        with open(_SESSIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            now = time.time()
+            return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("expires", 0) > now}
+    except Exception as exc:
+        print(f"Warning: could not read sessions file: {exc}", flush=True)
+        return {}
+
+def _save_admin_sessions(sessions: dict) -> None:
+    try:
+        tmp_file = _SESSIONS_FILE.with_suffix(".tmp")
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(sessions, f)
+        tmp_file.replace(_SESSIONS_FILE)
+    except Exception as exc:
+        print(f"Warning: could not persist sessions file: {exc}", flush=True)
+
+_ADMIN_SESSIONS = _load_admin_sessions()
 
 def _issue_admin_session(email: str):
+    global _ADMIN_SESSIONS
+    _ADMIN_SESSIONS = _load_admin_sessions()
     token = "admin_token_" + secrets.token_urlsafe(32)
     admin = _admin_record(email)
     _ADMIN_SESSIONS[token] = {
@@ -77,6 +102,7 @@ def _issue_admin_session(email: str):
         "user_id": (admin or {}).get("user_id"),
         "expires": time.time() + int(os.environ.get("ADMIN_SESSION_SECONDS", "28800")),
     }
+    _save_admin_sessions(_ADMIN_SESSIONS)
     return token, admin
 
 def send_brevo_email(to_email: str, subject: str, content: str):
@@ -186,6 +212,7 @@ def _is_allowed_admin_email(email: str) -> bool:
     return email in SUPER_ADMIN_EMAILS or _admin_record(email) is not None
 
 def _require_admin(authorization: str | None, write: bool = False):
+    global _ADMIN_SESSIONS
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing token")
     token = authorization.split(" ", 1)[1]
@@ -193,6 +220,10 @@ def _require_admin(authorization: str | None, write: bool = False):
     if master_key and secrets.compare_digest(token, master_key):
         return {"email": ADMIN_EMAIL, "role": "Super Admin", "user_id": None}
     session = _ADMIN_SESSIONS.get(token)
+    if not session:
+        # Reload from disk in case another process/worker issued the session
+        _ADMIN_SESSIONS = _load_admin_sessions()
+        session = _ADMIN_SESSIONS.get(token)
     if not session or time.time() > session["expires"]:
         raise HTTPException(401, "Invalid or expired admin token")
     current = _admin_record(session["email"])

@@ -52,7 +52,12 @@ export default function App(){
    }catch(e:any){
      try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
      setIsBuildingUpdate(false);
-     fail(e);
+     if(/token|expired|401/i.test(e?.message||'')){
+       logout();
+       fail('Your administrator session expired. Please sign in again to apply the update.');
+     } else {
+       fail(e);
+     }
    }
  }
  async function load(){if(!token)return;setBusy(true);try{const[s,u,w,g,a,t,ad]=await Promise.all([req('/session'),req('/users'),req('/workspaces'),req('/groups'),req('/audit?limit=300'),req('/support-requests'),req('/admins')]);setSession(s);setUsers(u.users||[]);const teamWorkspaces=(w.workspaces||[]).filter((item:any)=>!item.is_personal&&String(item.name||'').trim().toLowerCase()!=='my workspace').sort((left:any,right:any)=>String(left.name||'').localeCompare(String(right.name||'')));setWorkspaces(teamWorkspaces);setGroups(g.groups||[]);setAudit(a.events||[]);setTickets(t.requests||[]);setAdmins(ad.admins||[]);try{setSummary(await req('/governance/summary'))}catch{setSummary({})}}catch(e:any){if(/token|expired/i.test(e.message))logout();else fail(e)}finally{setBusy(false)}}

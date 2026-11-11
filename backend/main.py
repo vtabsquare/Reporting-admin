@@ -318,18 +318,33 @@ def _ensure_user_personal_workspace(sb: Client, user_id: str, email: str, displa
         print(f"Warning: Failed to ensure personal workspace for {clean_email}: {e}", flush=True)
         return None
 
+_USERS_CACHE = {"data": None, "expires": 0}
+_WORKSPACES_CACHE = {"data": None, "expires": 0}
+
+def _clear_admin_cache():
+    global _USERS_CACHE, _WORKSPACES_CACHE
+    _USERS_CACHE = {"data": None, "expires": 0}
+    _WORKSPACES_CACHE = {"data": None, "expires": 0}
+
 @app.get("/api/users")
 def get_users(authorization: str | None = Header(default=None)):
     _require_admin(authorization)
+    global _USERS_CACHE
+    now = time.time()
+    if _USERS_CACHE["data"] and _USERS_CACHE["expires"] > now:
+        return _USERS_CACHE["data"]
     sb = get_supabase()
     res = sb.table('vtab_users').select('id, email, display_name').execute()
     admins = sb.table('platform_admins').select('user_id,role,status').execute().data or []
     admin_map = {row['user_id']: row for row in admins}
     group_members = sb.table('user_group_members').select('user_id,group_id').execute().data or []
-    return {"users": [{**user, 'admin': admin_map.get(user['id']), 'group_count': len([m for m in group_members if m['user_id'] == user['id']])} for user in (res.data or [])]}
+    result = {"users": [{**user, 'admin': admin_map.get(user['id']), 'group_count': len([m for m in group_members if m['user_id'] == user['id']])} for user in (res.data or [])]}
+    _USERS_CACHE = {"data": result, "expires": now + 15}
+    return result
 
 @app.post("/api/users/create")
 def create_user(req: CreateUserReq, authorization: str | None = Header(default=None)):
+    _clear_admin_cache()
     actor = _require_admin(authorization, write=True)
     sb = get_supabase()
     
@@ -441,6 +456,10 @@ def admin_create_workspace(req: CreateWorkspaceReq, authorization: str | None = 
 @app.get("/api/workspaces")
 def admin_get_workspaces(authorization: str | None = Header(default=None)):
     _require_admin(authorization)
+    global _WORKSPACES_CACHE
+    now = time.time()
+    if _WORKSPACES_CACHE["data"] and _WORKSPACES_CACHE["expires"] > now:
+        return _WORKSPACES_CACHE["data"]
     sb = get_supabase()
     res = sb.table('workspaces').select('*').execute()
     # Exclude personal "My Workspace" entries, only include created team workspaces
@@ -457,7 +476,9 @@ def admin_get_workspaces(authorization: str | None = Header(default=None)):
         workspace['owner'] = user_map.get(owner_id)
         workspace['member_count'] = len({row['user_id'] for row in members if row['workspace_id'] == workspace['id']})
         workspace['group_count'] = len([row for row in group_grants if row['workspace_id'] == workspace['id']])
-    return {"workspaces": filtered}
+    result = {"workspaces": filtered}
+    _WORKSPACES_CACHE = {"data": result, "expires": now + 15}
+    return result
 
 @app.post("/api/workspaces/members/add")
 def admin_add_member(req: AddMemberReq, authorization: str | None = Header(default=None)):

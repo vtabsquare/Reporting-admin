@@ -47,7 +47,8 @@ export default function App(){
    try{
      const d=await req(`/update/status?_t=${Date.now()}`, { cache: 'no-store' });
      setUpdateStatus(d);
-     if (d.last_apply_status === 'succeeded' || (!d.update_available && !d.applying && localStorage.getItem('vtab_admin_building_update'))) {
+     const isBuilding = Boolean(localStorage.getItem('vtab_admin_building_update'));
+     if (isBuilding && (d.last_apply_status === 'succeeded' || (!d.update_available && !d.applying))) {
        try { localStorage.removeItem('vtab_admin_building_update'); } catch {}
        setIsBuildingUpdate(false);
        window.location.reload();

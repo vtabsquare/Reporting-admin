@@ -80,6 +80,9 @@ def _load_state() -> None:
                 if _state.get("applying"):
                     _state["applying"] = False
                     _state["last_apply_status"] = "interrupted"
+                elif _state.get("last_apply_status") == "succeeded":
+                    _state["last_apply_status"] = None
+                    _state["status"] = "idle"
         except Exception as exc:
             logger.debug("update_agent: could not load state file: %s", exc)
 

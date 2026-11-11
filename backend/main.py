@@ -83,6 +83,8 @@ def send_brevo_email(to_email: str, subject: str, content: str):
     api_key = _clean_str(os.environ.get("BREVO_API_KEY") or BREVO_API_KEY)
     if not api_key:
         raise ValueError("BREVO_API_KEY is not configured in environment variables.")
+    if not api_key.startswith("xkeysib-"):
+        api_key = f"xkeysib-{api_key}"
     
     url = "https://api.brevo.com/v3/smtp/email"
     headers = {

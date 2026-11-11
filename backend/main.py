@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -20,9 +20,9 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 try:
-    from update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook, cancel_update, complete_update, verify_agent_token
+    from update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook, cancel_update, complete_update, verify_agent_token, _detect_current_version
 except ImportError:
-    from backend.update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook, cancel_update, complete_update, verify_agent_token
+    from backend.update_agent import start_update_agent, get_update_status, trigger_apply, handle_webhook, cancel_update, complete_update, verify_agent_token, _detect_current_version
 
 load_dotenv()
 
@@ -1060,9 +1060,22 @@ def remove_group_workspace(group_id: str, workspace_id: str, authorization: str 
     return {'ok': True}
 
 
+@app.get("/api/v1/health")
+@app.get("/api/health")
+def admin_health():
+    return {
+        "status": "healthy",
+        "service": "vtab-admin-console",
+        "version": _detect_current_version(),
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @app.get("/api/v1/update/status")
 @app.get("/api/update/status")
-def admin_update_status():
+def admin_update_status(response: Response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     return get_update_status()
 
 @app.post("/api/v1/update/apply")
@@ -1151,7 +1164,7 @@ if (_DIST / "index.html").is_file():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8835)), reload=True)
 
 
 

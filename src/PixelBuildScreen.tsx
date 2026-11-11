@@ -73,7 +73,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
       setLogs((l) => [...l, `> [${formatTime(secondsElapsed)}] RUNNING UVICORN SERVER ON DIGITALOCEAN DROPLET...`]);
     } else if (secondsElapsed === 115) {
       setProgress(94);
-      setStatusMessage('AWAITING SERVICE PORT BINDING (HTTP:8000)...');
+      setStatusMessage('AWAITING SERVICE PORT BINDING (HTTP:8835)...');
       setLogs((l) => [...l, `> [${formatTime(secondsElapsed)}] VERIFYING PORT BINDING & HEALTH STATUS...`]);
     }
   }, [secondsElapsed, isCompleted, isError, targetVersion]);
@@ -86,7 +86,7 @@ export const PixelBuildScreen: React.FC<PixelBuildScreenProps> = ({
     const pollStatus = async () => {
       if (successTriggered || unmounted) return;
       try {
-        const res = await fetch(`${apiUrl}/update/status`).then((r) => (r.ok ? r.json() : null));
+        const res = await fetch(`${apiUrl}/update/status?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null));
         if (unmounted || !res) return;
 
         if (res.last_apply_status === 'succeeded' || res.status === 'completed' || (secondsElapsed > 15 && res.update_available === false && !res.applying)) {

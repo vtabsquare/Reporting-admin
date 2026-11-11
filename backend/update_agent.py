@@ -459,13 +459,79 @@ def trigger_apply() -> None:
     try:
         _report("preflight", "Starting administration console update")
 
-        # 1. Cloud environment (Render)
-        is_render = bool(
-            os.environ.get("RENDER")
-            or os.environ.get("RENDER_INSTANCE_ID")
-            or os.environ.get("RENDER_SERVICE_ID")
-            or os.environ.get("RENDER_API_KEY")
+        # 1. DigitalOcean droplet / local host environment (takes priority)
+        is_droplet = (
+            (_REPO_ROOT / ".git").is_dir()
+            or os.path.exists("/etc/systemd/system/reportingtool-admin.service")
+            or os.environ.get("VTAB_DEPLOY_TARGET") == "digitalocean"
+            or not bool(os.environ.get("RENDER_INSTANCE_ID"))
         )
+        deploy_script = _REPO_ROOT / "deploy.sh"
+        target_sha = _state.get("target_commit_sha") or _state.get("available_version") or ""
+        if str(target_sha).startswith("commit-"):
+            target_sha = str(target_sha).replace("commit-", "", 1)
+
+        if is_droplet:
+            if deploy_script.is_file():
+                logger.info("update_agent: executing deploy.sh with target %s", target_sha or "origin/main")
+                _set_state(last_apply_status="deploying", status="deploying")
+                _report("deploying", "Running local deployment script deploy.sh...")
+                cmd = ["bash", str(deploy_script)]
+                if target_sha:
+                    cmd.append(target_sha)
+                subprocess.run(cmd, cwd=str(_REPO_ROOT), check=True, capture_output=True, text=True)
+            else:
+                logger.info("update_agent: pulling latest changes from git origin main in %s", _REPO_ROOT)
+                _set_state(last_apply_status="pulling", status="pulling")
+                subprocess.run(["git", "fetch", "origin"], cwd=str(_REPO_ROOT), check=True, capture_output=True, text=True)
+                reset_target = target_sha if target_sha else "origin/main"
+                subprocess.run(["git", "reset", "--hard", reset_target], cwd=str(_REPO_ROOT), check=True, capture_output=True, text=True)
+                logger.info("update_agent: git fetch and reset completed.")
+
+                _set_state(last_apply_status="deploying", status="deploying")
+                _report("deploying", "Building frontend assets and installing backend dependencies...")
+
+                requirements_txt = _BACKEND_DIR / "requirements.txt"
+                if requirements_txt.is_file():
+                    try:
+                        venv_pip = _BACKEND_DIR / "venv" / "bin" / "pip"
+                        pip_cmd = str(venv_pip) if venv_pip.is_file() else sys.executable
+                        args = [pip_cmd, "install", "-r", str(requirements_txt), "-q"] if venv_pip.is_file() else [pip_cmd, "-m", "pip", "install", "-r", str(requirements_txt), "-q"]
+                        subprocess.run(args, cwd=str(_BACKEND_DIR), check=False, capture_output=True, text=True)
+                    except Exception as pip_err:
+                        logger.warning("pip install warning: %s", pip_err)
+
+                package_json = _REPO_ROOT / "package.json"
+                if package_json.is_file():
+                    logger.info("update_agent: building frontend dist bundle...")
+                    subprocess.run(["npm", "run", "build"], cwd=str(_REPO_ROOT), check=True, capture_output=True, text=True)
+                    subprocess.run(["chown", "-R", "www-data:www-data", str(_REPO_ROOT / "dist")], check=False)
+                    subprocess.run(["chmod", "-R", "755", str(_REPO_ROOT / "dist")], check=False)
+
+                if os.name != "nt":
+                    try:
+                        subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart reportingtool-admin.service && nginx -t && systemctl reload nginx"])
+                    except Exception as restart_exc:
+                        logger.warning("Could not schedule service restart: %s", restart_exc)
+
+            _set_state(last_apply_status="validating", status="validating")
+            _report("validating", "Validating health and runtime integrity...")
+            new_version = _detect_current_version()
+            new_commit = _current_commit()
+            _set_state(
+                applying=False,
+                last_apply_status="succeeded",
+                status="completed",
+                current_version=new_version,
+                current_commit_sha=new_commit,
+                update_available=False,
+            )
+            _report("succeeded", "Administration update completed and verified healthy")
+            logger.info("update_agent: apply succeeded. new version=%s, commit=%s", new_version, new_commit)
+            return
+
+        # 2. Cloud environment (Render fallback only)
+        is_render = bool(os.environ.get("RENDER") or os.environ.get("RENDER_INSTANCE_ID"))
         if is_render:
             _set_state(last_apply_status="deploying", status="deploying")
             _report("deploying", "Render deploy triggered — building in cloud...")
@@ -486,80 +552,6 @@ def trigger_apply() -> None:
                 _set_state(applying=False, last_apply_status="failed", status="failed", last_error=err_msg)
                 _report("failed", detail=err_msg)
                 return
-
-        # 2. Local / DigitalOcean droplet environment
-        logger.info("update_agent: pulling latest changes from git origin main in %s", _REPO_ROOT)
-        _set_state(last_apply_status="pulling", status="pulling")
-        subprocess.run(
-            ["git", "fetch", "origin"],
-            cwd=str(_REPO_ROOT),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["git", "reset", "--hard", "origin/main"],
-            cwd=str(_REPO_ROOT),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        logger.info("update_agent: git fetch and reset completed.")
-
-        _set_state(last_apply_status="deploying", status="deploying")
-        _report("deploying", "Building frontend assets and installing backend dependencies...")
-
-        # Update backend dependencies if requirements.txt exists
-        requirements_txt = _BACKEND_DIR / "requirements.txt"
-        if requirements_txt.is_file():
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "-r", str(requirements_txt)],
-                    cwd=str(_BACKEND_DIR),
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-            except Exception as pip_err:
-                logger.warning("pip install warning: %s", pip_err)
-
-        # Build frontend assets if package.json exists
-        package_json = _REPO_ROOT / "package.json"
-        if package_json.is_file():
-            logger.info("update_agent: building frontend dist bundle...")
-            subprocess.run(
-                ["npm", "run", "build"],
-                cwd=str(_REPO_ROOT),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            logger.info("update_agent: frontend build succeeded.")
-
-        # Validate build
-        _set_state(last_apply_status="validating", status="validating")
-        _report("validating", "Validating health and runtime integrity...")
-
-        new_version = _detect_current_version()
-        new_commit = _current_commit()
-
-        _set_state(
-            applying=False,
-            last_apply_status="succeeded",
-            status="completed",
-            current_version=new_version,
-            current_commit_sha=new_commit,
-            update_available=False,
-        )
-        _report("succeeded", "Administration update completed and verified healthy")
-        logger.info("update_agent: apply succeeded. new version=%s, commit=%s", new_version, new_commit)
-
-        # Gracefully restart systemd service on Linux droplet
-        if os.name != "nt":
-            try:
-                subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart reportingtool-admin.service"])
-            except Exception as restart_exc:
-                logger.warning("Could not schedule service restart: %s", restart_exc)
 
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()

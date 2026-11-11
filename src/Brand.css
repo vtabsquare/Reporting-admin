@@ -1,0 +1,16 @@
+.vtabBrandIcon,
+.brand > span:first-child,
+.logo-large {
+  display: block;
+  object-fit: contain;
+  background-color: transparent !important;
+  background-image: url('/vtab-icon.png') !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  color: transparent !important;
+}
+
+.vtabBrandIcon { width: 40px; height: 40px; border-radius: 10px; }
+.brand > span:first-child, .logo-large { font-size: 0 !important; }
+.adminLoadingBrand.vtabBrandIcon { width: 42px; height: 42px; }

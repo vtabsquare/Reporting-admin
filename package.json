@@ -4,7 +4,9 @@
   "version": "1.0.5",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "python run_admin_app.py",
+    "dev:frontend": "vite",
+    "start": "python run_admin_app.py",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

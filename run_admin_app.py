@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -16,6 +18,10 @@ VENV_DIR = BACKEND_DIR / ".venv"
 VENV_PYTHON = VENV_DIR / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 VITE = ROOT / "node_modules" / ".bin" / ("vite.cmd" if os.name == "nt" else "vite")
 NPM = "npm.cmd" if os.name == "nt" else "npm"
+BACKEND_HOST = os.environ.get("ADMIN_BACKEND_HOST", "127.0.0.1")
+BACKEND_PORT = int(os.environ.get("ADMIN_BACKEND_PORT", "8000"))
+FRONTEND_HOST = os.environ.get("ADMIN_FRONTEND_HOST", "127.0.0.1")
+FRONTEND_PORT = int(os.environ.get("ADMIN_FRONTEND_PORT", "5173"))
 
 
 def run_setup(command: list[str], cwd: Path, description: str) -> None:
@@ -76,6 +82,31 @@ def ensure_started(process: subprocess.Popen[bytes], name: str, seconds: float =
         time.sleep(0.2)
 
 
+def wait_for_backend(process: subprocess.Popen[bytes], timeout: float = 30.0) -> None:
+    """Wait until the API is accepting requests, not merely until Python stays alive."""
+    health_url = f"http://{BACKEND_HOST}:{BACKEND_PORT}/api/health"
+    deadline = time.monotonic() + timeout
+    last_error = "no response"
+    while time.monotonic() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(
+                f"Admin backend stopped during startup (exit code {return_code})."
+            )
+        try:
+            with urllib.request.urlopen(health_url, timeout=1.5) as response:
+                if response.status == 200:
+                    return
+                last_error = f"HTTP {response.status}"
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last_error = str(error)
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"Admin backend did not become ready at {health_url} within {timeout:.0f}s "
+        f"({last_error})."
+    )
+
+
 def stop_process(process: subprocess.Popen[bytes] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -101,16 +132,28 @@ def main() -> int:
 
         child_environment = os.environ.copy()
         child_environment["PYTHONUNBUFFERED"] = "1"
+        child_environment["ADMIN_BACKEND_HOST"] = BACKEND_HOST
+        child_environment["ADMIN_BACKEND_PORT"] = str(BACKEND_PORT)
+        child_environment["PORT"] = str(BACKEND_PORT)
 
-        print("\nStarting Admin Backend on http://127.0.0.1:8000...")
+        print(f"\nStarting Admin Backend on http://{BACKEND_HOST}:{BACKEND_PORT}...")
         backend_process = subprocess.Popen(
             [str(VENV_PYTHON), "main.py"], cwd=BACKEND_DIR, env=child_environment
         )
-        ensure_started(backend_process, "Admin backend")
+        wait_for_backend(backend_process)
 
-        print("Starting Admin Frontend on http://127.0.0.1:5173...")
+        print(f"Starting Admin Frontend on http://{FRONTEND_HOST}:{FRONTEND_PORT}...")
         frontend_process = subprocess.Popen(
-            [NPM, "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"],
+            [
+                NPM,
+                "run",
+                "dev:frontend",
+                "--",
+                "--host",
+                FRONTEND_HOST,
+                "--port",
+                str(FRONTEND_PORT),
+            ],
             cwd=ROOT,
             env=child_environment,
         )
@@ -118,8 +161,8 @@ def main() -> int:
 
         print("\n" + "-" * 50)
         print("ADMIN APPLICATION IS RUNNING:")
-        print(" - Frontend: http://127.0.0.1:5173")
-        print(" - Backend:  http://127.0.0.1:8000")
+        print(f" - Frontend: http://{FRONTEND_HOST}:{FRONTEND_PORT}")
+        print(f" - Backend:  http://{BACKEND_HOST}:{BACKEND_PORT}")
         print("Press Ctrl+C to stop both processes.")
         print("-" * 50)
 
@@ -139,8 +182,8 @@ def main() -> int:
     except (OSError, RuntimeError) as error:
         print(f"\nSTARTUP FAILED: {error}", file=sys.stderr)
         print(
-            "If this was the first run, confirm that the computer has internet access "
-            "and that Node.js LTS is installed, then run the launcher again.",
+            "If this was the first run, confirm that the computer has internet access, "
+            "Python and Node.js LTS are installed, then run the launcher again.",
             file=sys.stderr,
         )
         return 1

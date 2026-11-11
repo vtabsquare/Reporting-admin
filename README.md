@@ -36,6 +36,15 @@ Install the current [Node.js LTS](https://nodejs.org/) release once, then launch
 python run_admin_app.py
 ```
 
+The equivalent npm command is:
+
+```powershell
+npm run dev
+```
+
+Both commands start the API and frontend together. `npm run dev:frontend` is reserved
+for frontend-only work when the API is already running separately.
+
 On the first launch, the runner automatically creates `backend/.venv`, installs the
 Python packages from `backend/requirements.txt`, and installs the frontend packages.
 The initial setup therefore needs internet access and may take a few minutes. Later
@@ -48,6 +57,11 @@ message, correct the stated prerequisite, and run the same command again.
 Frontend: `http://127.0.0.1:5173`
 
 Backend API: `http://127.0.0.1:8000`
+
+The launcher starts both the API and the browser application and waits for
+`/api/health` before opening the frontend. Do not start only `npm run dev`, because
+the browser application requires the Python API. To use another local API port,
+set `ADMIN_BACKEND_PORT` and the matching `VITE_ADMIN_API_TARGET` before launching.
 
 ## Services integration
 

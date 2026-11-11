@@ -38,6 +38,12 @@ app.add_middleware(
 
 start_update_agent()
 
+
+@app.get("/api/health")
+def admin_api_health():
+    """Lightweight readiness probe used by the local launcher and deployments."""
+    return {"ok": True, "service": "vtab-admin-api"}
+
 def _clean_str(val: str | None) -> str:
     if not val:
         return ""
@@ -599,7 +605,18 @@ def admin_update_member_ui_permissions(workspace_id: str, user_id: str, req: Upd
         'can_alert': bool(req.can_alert),
         'can_download': bool(req.can_download),
     }
-    description.setdefault('member_ui_permissions', {})[str(user_id)] = permissions
+    permission_map = description.setdefault('member_ui_permissions', {})
+    permission_map[str(user_id)] = permissions
+    # Keep an email-keyed mirror for public iframe identity resolution and for
+    # installations where the Auth UUID and the platform-user UUID were
+    # imported from different environments.
+    try:
+        user_rows = sb.table('vtab_users').select('email').eq('id', user_id).limit(1).execute().data or []
+        member_email = str((user_rows[0] if user_rows else {}).get('email') or '').strip().lower()
+        if member_email:
+            permission_map[member_email] = permissions
+    except Exception:
+        pass
     sb.table('workspaces').update({'description': json.dumps(description)}).eq('id', workspace_id).execute()
     _audit('workspace.member.ui_permissions', 'workspace', workspace_id, actor, {'target_user_id': user_id, 'permissions': permissions}, workspace_id)
     return {'ok': True, 'ui_permissions': permissions}
@@ -1218,7 +1235,9 @@ if (_DIST / "index.html").is_file():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8835)), reload=True)
+    backend_host = os.environ.get("ADMIN_BACKEND_HOST", "127.0.0.1")
+    backend_port = int(os.environ.get("ADMIN_BACKEND_PORT", os.environ.get("PORT", "8000")))
+    uvicorn.run("main:app", host=backend_host, port=backend_port, reload=True)
 
 
 

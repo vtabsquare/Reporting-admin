@@ -260,6 +260,31 @@ def admin_session(authorization: str | None = Header(default=None)):
     actor = _require_admin(authorization)
     return {"email": actor.get("email"), "role": actor.get("role"), "expires_at": actor.get("expires")}
 
+@app.post("/api/ticket-center/link")
+def admin_ticket_center_link(payload: dict, authorization: str | None = Header(default=None)):
+    actor = _require_admin(authorization)
+    base = os.environ.get("VTAB_TICKET_CENTER_URL", "http://127.0.0.1:8860").rstrip("/")
+    key = os.environ.get("VTAB_TICKET_INTEGRATION_KEY", "").strip()
+    if not key:
+        raise HTTPException(503, "VTAB Ticket Center integration is not configured.")
+    handoff = {
+        "user_id": str(actor.get("user_id") or actor.get("email")),
+        "email": actor.get("email"),
+        "role": "admin",
+        "app_version": os.environ.get("VTAB_ADMIN_VERSION", "2.2"),
+        "os_info": payload.get("os_info") or {},
+        "workspace_id": payload.get("workspace_id"),
+        "recent_errors": payload.get("recent_errors"),
+        "source": str(payload.get("source") or "admin-console"),
+        "open_view": payload.get("open_view") if "open_view" in payload else "submit",
+    }
+    try:
+        response = httpx.post(base + "/api/integrations/link", json=handoff, headers={"X-VTAB-Integration-Key": key}, timeout=12)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        raise HTTPException(502, "VTAB Ticket Center is currently unavailable.") from error
+
 def _ensure_user_personal_workspace(sb: Client, user_id: str, email: str, display_name: str | None = None):
     """Ensure a user has an entry in vtab_users and their personal My Workspace."""
     clean_email = email.lower().strip()
@@ -775,6 +800,8 @@ def admin_update_workspace_notification_policy(workspace_id: str, req: UpdateNot
 class UpdateSupportStatusReq(BaseModel):
     status: str
     notes: str | None = None
+    user_experience_verified: bool = False
+    user_satisfaction_rating: int | None = None
 
 class AdminInviteReq(BaseModel):
     email: str
@@ -797,10 +824,78 @@ class GroupWorkspaceReq(BaseModel):
 
 
 
+def _map_ticket_to_support_request(row: dict) -> dict:
+    raw_status = str(row.get("status") or "NEW").upper()
+    fixed_in_build = str(row.get("fixed_in_build") or "")
+    manager_decision = ""
+    if fixed_in_build.startswith("manager:"):
+        manager_decision = fixed_in_build.split(":", 1)[1].strip().lower()
+    elif raw_status == "PENDING_ADMIN_SIGN_OFF":
+        manager_decision = "approved"
+
+    if raw_status == "CLOSED":
+        display_status = "Closed"
+    elif raw_status == "PENDING_ADMIN_SIGN_OFF":
+        display_status = "Approved by Manager (Pending Admin Close)"
+    elif raw_status == "IN_PROGRESS" and manager_decision == "blocked":
+        display_status = "Blocked by Manager"
+    elif raw_status == "REOPENED":
+        display_status = "Reopened"
+    elif raw_status == "RESOLVED_BY_DEV":
+        display_status = "Resolved by Dev"
+    elif raw_status == "IN_PROGRESS":
+        display_status = "In Progress"
+    elif raw_status == "ASSIGNED":
+        display_status = "Assigned"
+    else:
+        display_status = "New"
+
+    return {
+        "id": str(row.get("id") or ""),
+        "request_number": f"#{row.get('ticket_number')}" if row.get("ticket_number") is not None else str(row.get("id") or ""),
+        "issue_title": row.get("title") or "",
+        "description": row.get("description") or "",
+        "service": row.get("source") or row.get("category") or "Ticket Center",
+        "severity": str(row.get("severity") or "medium").capitalize(),
+        "status": raw_status,
+        "display_status": display_status,
+        "fixed_in_build": fixed_in_build,
+        "manager_decision": manager_decision,
+        "manager_notes": row.get("dev_resolution_notes") or "",
+        "manager_updated_by": row.get("assigned_dev_id") or "",
+        "manager_updated_at": row.get("dev_resolved_at") or "",
+        "admin_notes": row.get("admin_feedback_notes") or "",
+        "admin_reviewed_by": row.get("admin_reviewed_by") or "",
+        "admin_closed_at": row.get("admin_closed_at") or "",
+        "user_experience_verified": bool(row.get("user_experience_verified")),
+        "owner_email": row.get("reporter_email") or "",
+        "workspace_id": row.get("workspace_id"),
+        "created_at": row.get("created_at") or "",
+        "updated_at": row.get("updated_at") or "",
+    }
+
+
 @app.get("/api/support-requests")
 def admin_get_support_requests(status: str | None = None, authorization: str | None = Header(default=None)):
     _require_admin(authorization)
-    # 1. Try calling standalone Services API
+    # 1. Fetch directly from Supabase central tickets table when available
+    try:
+        sb = get_supabase()
+        rows = sb.table("tickets").select("*").order("updated_at", desc=True).execute().data or []
+        mapped = [_map_ticket_to_support_request(r) for r in rows]
+        if status:
+            sf = status.strip().lower()
+            if sf == "open":
+                mapped = [r for r in mapped if str(r.get("status") or "").lower() not in ("closed", "resolved")]
+            elif sf == "closed":
+                mapped = [r for r in mapped if str(r.get("status") or "").lower() in ("closed", "resolved")]
+            else:
+                mapped = [r for r in mapped if str(r.get("status") or "").lower() == sf]
+        return {"requests": mapped, "total": len(mapped)}
+    except Exception:
+        pass
+
+    # 2. Fallback to standalone Services API
     try:
         url = f"{SERVICES_API_URL.rstrip('/')}/service/support-requests"
         params = {}
@@ -848,6 +943,98 @@ def admin_update_support_status(request_id: str, req: UpdateSupportStatusReq, au
     actor = _require_admin(authorization, write=True)
     new_status = req.status.strip()
     notes = (req.notes or "").strip()
+
+    # 0. Check if this ticket lives in Supabase public.tickets and govern via VTAB Ticket Center
+    central_row = None
+    try:
+        sb = get_supabase()
+        found = sb.table("tickets").select("*").eq("id", request_id).limit(1).execute().data or []
+        if found:
+            central_row = found[0]
+    except Exception:
+        central_row = None
+
+    if central_row is not None:
+        target_status = new_status.upper()
+        if target_status == "CLOSED":
+            if not req.user_experience_verified:
+                raise HTTPException(status_code=400, detail="Confirm user experience verification before closing the ticket.")
+            if not notes:
+                raise HTTPException(status_code=400, detail="Verification and closure notes are required.")
+        elif target_status == "REOPENED" and not notes:
+            raise HTTPException(status_code=400, detail="Reopen notes are required.")
+
+        tc_url = _clean_str(os.environ.get("VTAB_TICKET_CENTER_URL", "http://127.0.0.1:8860")).rstrip("/")
+        tc_key = _clean_str(os.environ.get("VTAB_TICKET_INTEGRATION_KEY"))
+        if not tc_key:
+            raise HTTPException(status_code=503, detail="VTAB Ticket Center integration key is not configured.")
+
+        from urllib.parse import urlparse, parse_qs
+        try:
+            link_resp = httpx.post(
+                f"{tc_url}/api/integrations/link",
+                headers={"X-VTAB-Integration-Key": tc_key},
+                json={
+                    "user_id": str(actor.get("user_id") or actor.get("email") or "admin"),
+                    "email": str(actor.get("email") or ADMIN_EMAIL),
+                    "role": "admin",
+                    "source": "admin-console",
+                    "open_view": "signoff",
+                },
+                timeout=8.0,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Could not reach VTAB Ticket Center: {exc}")
+
+        if link_resp.status_code >= 400:
+            detail = "Failed to authorize admin transition with VTAB Ticket Center."
+            try:
+                detail = link_resp.json().get("detail") or detail
+            except Exception:
+                pass
+            raise HTTPException(status_code=link_resp.status_code, detail=detail)
+
+        link_url = str((link_resp.json() or {}).get("url") or "")
+        ticket_token = (parse_qs(urlparse(link_url).query).get("ticket_token") or [""])[0]
+        if not ticket_token:
+            raise HTTPException(status_code=502, detail="Ticket Center did not return an admin handoff token.")
+
+        payload: dict = {
+            "status": target_status,
+            "notes": notes,
+            "user_experience_verified": bool(req.user_experience_verified),
+        }
+        if req.user_satisfaction_rating is not None:
+            payload["user_satisfaction_rating"] = req.user_satisfaction_rating
+
+        try:
+            tr_resp = httpx.post(
+                f"{tc_url}/api/tickets/{request_id}/transition",
+                headers={"X-VTAB-Ticket-Token": ticket_token},
+                json=payload,
+                timeout=10.0,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to submit ticket transition: {exc}")
+
+        if tr_resp.status_code >= 400:
+            detail = "Ticket transition rejected."
+            try:
+                detail = tr_resp.json().get("detail") or detail
+            except Exception:
+                pass
+            raise HTTPException(status_code=tr_resp.status_code, detail=detail)
+
+        updated_rows = get_supabase().table("tickets").select("*").eq("id", request_id).limit(1).execute().data or []
+        mapped = _map_ticket_to_support_request(updated_rows[0]) if updated_rows else _map_ticket_to_support_request(central_row)
+        _audit(
+            "support.status.update",
+            "ticket",
+            request_id,
+            actor,
+            {"status": target_status, "notes": notes, "user_experience_verified": bool(req.user_experience_verified)},
+        )
+        return {"ok": True, "request": mapped, "status": target_status}
 
     updated_req = None
 
@@ -910,12 +1097,18 @@ def governance_summary(authorization: str | None = Header(default=None)):
             return 0
     workspaces = sb.table('workspaces').select('id,name,is_personal').execute().data or []
     team_count = len([w for w in workspaces if not w.get('is_personal') and str(w.get('name') or '').strip().lower() != 'my workspace'])
+    open_tickets = 0
+    try:
+        t_resp = sb.table('tickets').select('id', count='exact').neq('status', 'CLOSED').execute()
+        open_tickets = t_resp.count if t_resp.count is not None else len(t_resp.data or [])
+    except Exception:
+        open_tickets = 0
     return {
         'users': count('vtab_users'),
         'workspaces': team_count,
         'groups': count('user_groups'),
         'active_admins': count('platform_admins', status='Active'),
-        'open_tickets': 0,
+        'open_tickets': open_tickets,
         'failed_refreshes': count('refresh_runs', status='failed'),
     }
 

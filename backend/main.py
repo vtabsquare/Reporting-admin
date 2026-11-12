@@ -263,7 +263,7 @@ def admin_session(authorization: str | None = Header(default=None)):
 @app.post("/api/ticket-center/link")
 def admin_ticket_center_link(payload: dict, authorization: str | None = Header(default=None)):
     actor = _require_admin(authorization)
-    base = os.environ.get("VTAB_TICKET_CENTER_URL", "https://ticketing.vtabsquare.com").rstrip("/")
+    base = os.environ.get("VTAB_TICKET_CENTER_URL", "https://ticketing.139.59.32.39.nip.io").rstrip("/")
     key = os.environ.get("VTAB_TICKET_INTEGRATION_KEY", "").strip()
     if not key:
         raise HTTPException(503, "VTAB Ticket Center integration is not configured.")

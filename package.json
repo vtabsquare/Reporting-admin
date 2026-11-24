@@ -9,6 +9,7 @@
     "start": "python run_admin_app.py",
     "build": "tsc -b && vite build",
     "push": "python push_admin.py",
+    "push:ui": "python push_admin.py --ui",
     "lint": "oxlint",
     "preview": "vite preview"
   },

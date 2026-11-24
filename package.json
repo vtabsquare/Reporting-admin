@@ -1,13 +1,14 @@
 {
   "name": "admin-application",
   "private": true,
-  "version": "1.0.5",
+  "version": "6.0.0",
   "type": "module",
   "scripts": {
     "dev": "python run_admin_app.py",
     "dev:frontend": "vite",
     "start": "python run_admin_app.py",
     "build": "tsc -b && vite build",
+    "push": "python push_admin.py",
     "lint": "oxlint",
     "preview": "vite preview"
   },

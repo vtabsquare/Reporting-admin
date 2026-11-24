@@ -827,18 +827,30 @@ class GroupWorkspaceReq(BaseModel):
 def _map_ticket_to_support_request(row: dict) -> dict:
     raw_status = str(row.get("status") or "NEW").upper()
     fixed_in_build = str(row.get("fixed_in_build") or "")
+    tier = str(row.get("tier") or "L2").upper()
+    escalated = bool(row.get("escalated_to_l2"))
+    ai_res = str(row.get("ai_resolution") or "")
+
     manager_decision = ""
     if fixed_in_build.startswith("manager:"):
+        manager_decision = fixed_in_build.split(":", 1)[1].strip().lower()
+    elif fixed_in_build.startswith("developer:"):
         manager_decision = fixed_in_build.split(":", 1)[1].strip().lower()
     elif raw_status == "PENDING_ADMIN_SIGN_OFF":
         manager_decision = "approved"
 
+    is_blocked = ("blocked" in fixed_in_build.lower()) or (manager_decision == "blocked") or (raw_status == "BLOCKED")
+
     if raw_status == "CLOSED":
         display_status = "Closed"
+    elif is_blocked:
+        display_status = "Blocked"
+    elif raw_status == "PENDING_ADMIN_SIGN_OFF" and tier == "L1":
+        display_status = "L1 Auto-Resolved (Pending Sign-Off)"
     elif raw_status == "PENDING_ADMIN_SIGN_OFF":
-        display_status = "Approved by Manager (Pending Admin Close)"
-    elif raw_status == "IN_PROGRESS" and manager_decision == "blocked":
-        display_status = "Blocked by Manager"
+        display_status = "Closed by Developer (Pending Admin Close)"
+    elif escalated or (raw_status == "REOPENED" and tier == "L2"):
+        display_status = "Escalated to L2"
     elif raw_status == "REOPENED":
         display_status = "Reopened"
     elif raw_status == "RESOLVED_BY_DEV":
@@ -850,6 +862,10 @@ def _map_ticket_to_support_request(row: dict) -> dict:
     else:
         display_status = "New"
 
+    manager_notes = row.get("dev_resolution_notes") or ""
+    if not manager_notes and ai_res:
+        manager_notes = f"[🤖 L1 Auto-Resolution]: {ai_res}"
+
     return {
         "id": str(row.get("id") or ""),
         "request_number": f"#{row.get('ticket_number')}" if row.get("ticket_number") is not None else str(row.get("id") or ""),
@@ -859,9 +875,13 @@ def _map_ticket_to_support_request(row: dict) -> dict:
         "severity": str(row.get("severity") or "medium").capitalize(),
         "status": raw_status,
         "display_status": display_status,
+        "tier": tier,
+        "escalated_to_l2": escalated,
+        "is_blocked": is_blocked,
+        "ai_resolution": ai_res,
         "fixed_in_build": fixed_in_build,
         "manager_decision": manager_decision,
-        "manager_notes": row.get("dev_resolution_notes") or "",
+        "manager_notes": manager_notes,
         "manager_updated_by": row.get("assigned_dev_id") or "",
         "manager_updated_at": row.get("dev_resolved_at") or "",
         "admin_notes": row.get("admin_feedback_notes") or "",
@@ -1168,6 +1188,94 @@ def admin_update_support_status(request_id: str, req: UpdateSupportStatusReq, au
         return {"ok": True, "status": new_status, "request_id": request_id}
 
     return {"ok": True, "request": updated_req, "status": new_status}
+
+
+class EscalateSupportReq(BaseModel):
+    reason: str = "Escalated to Tier L2"
+
+
+@app.post("/api/support-requests/{request_id}/escalate")
+def admin_escalate_support_request(
+    request_id: str,
+    req: EscalateSupportReq = EscalateSupportReq(),
+    authorization: str | None = Header(default=None),
+):
+    actor = _require_admin(authorization)
+    tc_url = _clean_str(os.environ.get("VTAB_TICKET_CENTER_URL", "")).rstrip("/")
+    tc_key = _clean_str(os.environ.get("VTAB_TICKET_INTEGRATION_KEY"))
+
+    if tc_url:
+        try:
+            headers = {"Content-Type": "application/json"}
+            if tc_key:
+                link_resp = httpx.post(
+                    f"{tc_url}/api/integrations/link",
+                    headers={"X-VTAB-Integration-Key": tc_key},
+                    json={
+                        "user_id": str(actor.get("user_id") or actor.get("email") or "admin"),
+                        "email": str(actor.get("email") or ADMIN_EMAIL),
+                        "role": "admin",
+                        "source": "admin-console",
+                        "open_view": "tickets",
+                    },
+                    timeout=6.0,
+                )
+                if link_resp.status_code < 400:
+                    from urllib.parse import urlparse, parse_qs
+                    link_url = str((link_resp.json() or {}).get("url") or "")
+                    ticket_token = (parse_qs(urlparse(link_url).query).get("ticket_token") or [""])[0]
+                    if ticket_token:
+                        headers["X-VTAB-Ticket-Token"] = ticket_token
+
+            headers["X-VTAB-Role"] = "admin"
+            headers["X-VTAB-User"] = str(actor.get("email") or ADMIN_EMAIL)
+
+            esc_resp = httpx.post(
+                f"{tc_url}/api/tickets/{request_id}/escalate",
+                headers=headers,
+                json={"reason": req.reason},
+                timeout=8.0,
+            )
+            if esc_resp.status_code < 400:
+                _audit(
+                    "support.tier.escalate",
+                    "ticket",
+                    request_id,
+                    actor,
+                    {"reason": req.reason, "tier": "L2"},
+                )
+                return {"ok": True, "ticket_id": request_id, "tier": "L2", "status": "REOPENED"}
+            else:
+                detail = "Ticket Center rejected escalation."
+                try:
+                    detail = esc_resp.json().get("detail") or detail
+                except Exception:
+                    pass
+                raise HTTPException(status_code=esc_resp.status_code, detail=detail)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print("Ticket Center escalation call error, trying Supabase direct update:", exc)
+
+    try:
+        sb = get_supabase()
+        sb.table("tickets").update({
+            "tier": "L2",
+            "escalated_to_l2": True,
+            "status": "REOPENED",
+            "admin_feedback_notes": req.reason,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", request_id).execute()
+        _audit(
+            "support.tier.escalate",
+            "ticket",
+            request_id,
+            actor,
+            {"reason": req.reason, "tier": "L2"},
+        )
+        return {"ok": True, "ticket_id": request_id, "tier": "L2", "status": "REOPENED"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not escalate ticket: {e}")
 
 
 # ── Governance dashboard, administrators and audit ────────────────────────────
